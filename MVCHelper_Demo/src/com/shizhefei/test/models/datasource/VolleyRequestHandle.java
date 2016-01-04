@@ -1,21 +1,19 @@
 package com.shizhefei.test.models.datasource;
 
 import com.android.volley.Request;
-import com.android.volley.RequestQueue;
 import com.shizhefei.mvc.RequestHandle;
 
 public class VolleyRequestHandle implements RequestHandle {
-	private RequestQueue requestQueue;
+	private Request<?> request;
 
-	public VolleyRequestHandle(RequestQueue requestQueue, Request<?> request) {
+	public VolleyRequestHandle(Request<?> request) {
 		super();
-		this.requestQueue = requestQueue;
-		request.setTag(this);
+		this.request = request;
 	}
 
 	@Override
 	public void cancle() {
-		requestQueue.cancelAll(this);
+		request.cancel();
 	}
 
 	@Override

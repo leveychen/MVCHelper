@@ -19,6 +19,7 @@ import android.annotation.TargetApi;
 import android.content.Context;
 import android.os.AsyncTask;
 import android.os.Build;
+import android.os.Handler;
 import android.support.v7.widget.RecyclerView;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -71,6 +72,7 @@ public class MVCHelper<DATA> {
 
 	private RecyclerViewHandler recyclerViewHandler = new RecyclerViewHandler();
 	private IAsyncDataSource<DATA> asyncDataSource;
+	private Handler handler;
 
 	public MVCHelper(IRefreshView refreshView) {
 		this(refreshView, loadViewFactory.madeLoadView(), loadViewFactory.madeLoadMoreView());
@@ -91,6 +93,7 @@ public class MVCHelper<DATA> {
 		mLoadView = loadView;
 		mLoadMoreView = loadMoreView;
 		mLoadView.init(refreshView.getSwitchView(), onClickRefresListener);
+		handler = new Handler();
 	}
 
 	/**
@@ -212,8 +215,9 @@ public class MVCHelper<DATA> {
 		} else {
 			if (cancle != null) {
 				cancle.cancle();
+				cancle = null;
 			}
-			RefreshResponseSender responseSender = new RefreshResponseSender(asyncDataSource, dataAdapter);
+			MResponseSender responseSender = new RefreshResponseSender(asyncDataSource, dataAdapter);
 			responseSender.onPreExecute();
 			cancle = responseSender.execute();
 		}
@@ -247,6 +251,7 @@ public class MVCHelper<DATA> {
 		} else { // 开启线程执行 IAsyncDataSource
 			if (cancle != null) {
 				cancle.cancle();
+				cancle = null;
 			}
 			LoadMoreResponseSender responseSender = new LoadMoreResponseSender(asyncDataSource, dataAdapter);
 			responseSender.onPreExecute();
@@ -266,6 +271,7 @@ public class MVCHelper<DATA> {
 			cancle.cancle();
 			cancle = null;
 		}
+		handler.removeCallbacksAndMessages(null);
 	}
 
 	private static class MyAsyncTask<Params, Progress, Result> extends AsyncTask<Params, Progress, Result> {
@@ -297,18 +303,20 @@ public class MVCHelper<DATA> {
 		@Override
 		public final void sendError(Exception exception) {
 			onPostExecute(null, exception);
+			cancle = null;
 		}
 
 		@Override
 		public final void sendData(DATA data) {
 			onPostExecute(data, null);
+			cancle = null;
 		}
 
 		protected abstract void onPostExecute(DATA data, Exception exception);
 
 		public RequestHandle execute() {
 			try {
-				executeImp();
+				return executeImp();
 			} catch (Exception e) {
 				e.printStackTrace();
 				onPostExecute(null, e);
@@ -323,6 +331,7 @@ public class MVCHelper<DATA> {
 	private class RefreshResponseSender extends MResponseSender {
 		private IAsyncDataSource<DATA> tDataSource;
 		private IDataAdapter<DATA> tDataAdapter;
+		private Runnable showRefreshing;
 
 		public RefreshResponseSender(IAsyncDataSource<DATA> tDataSource, IDataAdapter<DATA> tDataAdapter) {
 			super();
@@ -335,12 +344,27 @@ public class MVCHelper<DATA> {
 			if (hasInitLoadMoreView && mLoadMoreView != null) {
 				mLoadMoreView.showNormal();
 			}
-			if (tDataAdapter.isEmpty()) {
-				mLoadView.showLoading();
-				refreshView.showRefreshComplete();
-			} else {
-				refreshView.showRefreshing();
+			if (tDataSource instanceof IDataCacheLoader) {
+				@SuppressWarnings("unchecked")
+				IDataCacheLoader<DATA> cacheLoader = (IDataCacheLoader<DATA>) tDataSource;
+				DATA data = cacheLoader.loadCache(tDataAdapter.isEmpty());
+				if (data != null) {
+					tDataAdapter.notifyDataChanged(data, true);
+				}
 			}
+			handler.post(showRefreshing = new Runnable() {
+
+				@Override
+				public void run() {
+					if (tDataAdapter.isEmpty()) {
+						mLoadView.showLoading();
+						refreshView.showRefreshComplete();
+					} else {
+						mLoadView.restore();
+						refreshView.showRefreshing();
+					}
+				}
+			});
 			onStateChangeListener.onStartRefresh(tDataAdapter);
 		}
 
@@ -351,6 +375,7 @@ public class MVCHelper<DATA> {
 
 		@Override
 		protected void onPostExecute(DATA result, Exception exception) {
+			handler.removeCallbacks(showRefreshing);
 			if (result == null) {
 				if (tDataAdapter.isEmpty()) {
 					mLoadView.showFail(exception);
@@ -385,6 +410,7 @@ public class MVCHelper<DATA> {
 		private IDataSource<DATA> tDataSource;
 		private IDataAdapter<DATA> tDataAdapter;
 		private volatile Exception tException;
+		private Runnable showRefreshing;
 
 		public RefreshAsyncTask(IDataSource<DATA> dataSource, IDataAdapter<DATA> dataAdapter) {
 			super();
@@ -398,12 +424,27 @@ public class MVCHelper<DATA> {
 			if (hasInitLoadMoreView && mLoadMoreView != null) {
 				mLoadMoreView.showNormal();
 			}
-			if (tDataAdapter.isEmpty()) {
-				mLoadView.showLoading();
-				refreshView.showRefreshComplete();
-			} else {
-				refreshView.showRefreshing();
+			if (tDataSource instanceof IDataCacheLoader) {
+				@SuppressWarnings("unchecked")
+				IDataCacheLoader<DATA> cacheLoader = (IDataCacheLoader<DATA>) tDataSource;
+				DATA data = cacheLoader.loadCache(tDataAdapter.isEmpty());
+				if (data != null) {
+					tDataAdapter.notifyDataChanged(data, true);
+				}
 			}
+			handler.post(showRefreshing = new Runnable() {
+
+				@Override
+				public void run() {
+					if (tDataAdapter.isEmpty()) {
+						mLoadView.showLoading();
+						refreshView.showRefreshComplete();
+					} else {
+						mLoadView.restore();
+						refreshView.showRefreshing();
+					}
+				}
+			});
 			onStateChangeListener.onStartRefresh(tDataAdapter);
 		};
 
@@ -419,8 +460,15 @@ public class MVCHelper<DATA> {
 		}
 
 		@Override
+		protected void onCancelled() {
+			super.onCancelled();
+			handler.removeCallbacks(showRefreshing);
+		}
+
+		@Override
 		protected void onPostExecute(DATA result) {
 			super.onPostExecute(result);
+			handler.removeCallbacks(showRefreshing);
 			if (result == null) {
 				if (tDataAdapter.isEmpty()) {
 					mLoadView.showFail(tException);
@@ -566,8 +614,8 @@ public class MVCHelper<DATA> {
 	 * @return
 	 */
 	public boolean isLoading() {
-		if (cancle != null) {
-			return cancle.isRunning();
+		if (asyncDataSource != null) {
+			return cancle != null;
 		}
 		return asyncTask != null && asyncTask.isLoading();
 	}
